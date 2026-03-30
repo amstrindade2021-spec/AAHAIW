@@ -1,466 +1,696 @@
---[[
-    OMEGA BONDS v12.0 - "O Último Script de Farm"
-    Sistema: AFK 24/7 | Auto-Rejoin | Auto-Respawn | Quantum Collection
-    
-    Inovações:
-    - Auto-execute on respawn (nunca para de farmar)
-    - Kill player when no bonds (reinicia run)
-    - Server hop otimizado
-    - Persistência de estatísticas entre sessões
-]]
-
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
-local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TeleportService = game:GetService("TeleportService")
-local LocalPlayer = Players.LocalPlayer
-
--- CONFIGURAÇÃO GLOBAL (Persiste entre respawns)
-getgenv().OMEGA_CONFIG = getgenv().OMEGA_CONFIG or {
-    TotalBonds = 0,
-    SessionBonds = 0,
-    TotalRuns = 0,
-    StartTime = tick(),
-    IsRunning = false,
-    CurrentTarget = nil,
-    ServerHops = 0,
-    Deaths = 0
+getgenv().Apex = getgenv().Apex or {
+State = {
+Running = false,
+Paused = false,
+CurrentServer = tick(),
+BondsTotal = 0,
+BondsSession = 0,
+Runs = 0,
+Errors = 0,
+LastBond = 0,
+BPM = 0,
+ServerHops = 0,
+StartTime = tick()
+},
+Config = {
+ScanDepth = 12,
+MaxDistance = 5000,
+TweenSpeed = 350,
+RejoinDelay = 15,
+EngineInterval = 0.016,
+CollectionCooldown = 0.08,
+AntiAFKInterval = 30
+},
+Refs = {
+UI = nil,
+Connections = {},
+Threads = {}
+}
 }
 
-local STATS = getgenv().OMEGA_CONFIG
+local A = getgenv().Apex
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+local TeleportService = game:GetService("TeleportService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local HttpService = game:GetService("HttpService")
+local LocalPlayer = Players.LocalPlayer
 
--- CORREÇÃO: Esperar personagem carregar corretamente
-local function GetCharacter()
-    local char = LocalPlayer.Character
-    if not char then
-        char = LocalPlayer.CharacterAdded:Wait()
-    end
-    return char
+local function SafeGetCharacter()
+local char = LocalPlayer.Character
+if not char then
+char = LocalPlayer.CharacterAdded:Wait()
+task.wait(0.3)
+end
+return char
 end
 
-local Character = GetCharacter()
-local Humanoid = Character:WaitForChild("Humanoid")
-local RootPart = Character:WaitForChild("HumanoidRootPart")
+local function ValidatePlayerState()
+local char = LocalPlayer.Character
+if not char then return nil, nil, nil end
 
--- INTERFACE ULTRA-MÍNIMA (Só o essencial)
-local SG = Instance.new("ScreenGui")
-SG.Name = "OmegaBonds"
-SG.Parent = game.CoreGui
-SG.ResetOnSpawn = false -- CRÍTICO: Não resetar ao respawnar
+local hum = char:FindFirstChildOfClass("Humanoid")
+if not hum or hum.Health <= 0 then return nil, nil, nil end
 
--- Painel principal
-local Frame = Instance.new("Frame")
-Frame.Size = UDim2.new(0, 320, 0, 180)
-Frame.Position = UDim2.new(0, 10, 0, 10)
-Frame.BackgroundColor3 = Color3.fromRGB(8, 8, 10)
-Frame.BorderSizePixel = 0
-Frame.Parent = SG
+local root = char:FindFirstChild("HumanoidRootPart")
+if not root then return nil, nil, nil end
 
-Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 12)
-
--- Glow neon
-local Glow = Instance.new("ImageLabel")
-Glow.Size = UDim2.new(1, 20, 1, 20)
-Glow.Position = UDim2.new(0, -10, 0, -10)
-Glow.BackgroundTransparency = 1
-Glow.Image = "rbxassetid://8992230677"
-Glow.ImageColor3 = Color3.fromRGB(0, 255, 150)
-Glow.ImageTransparency = 0.9
-Glow.Parent = Frame
-
--- Título
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 35)
-Title.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
-Title.Text = "Ω OMEGA BONDS v12"
-Title.TextColor3 = Color3.new(0, 0, 0)
-Title.TextSize = 20
-Title.Font = Enum.Font.GothamBlack
-Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 12)
-Title.Parent = Frame
-
--- Contador principal
-local Counter = Instance.new("TextLabel")
-Counter.Size = UDim2.new(1, 0, 0, 50)
-Counter.Position = UDim2.new(0, 0, 0, 40)
-Counter.BackgroundTransparency = 1
-Counter.Text = tostring(STATS.TotalBonds)
-Counter.TextColor3 = Color3.fromRGB(0, 255, 150)
-Counter.TextSize = 48
-Counter.Font = Enum.Font.GothamBlack
-Counter.Parent = Frame
-
--- Label "TOTAL BONDS"
-local Label = Instance.new("TextLabel")
-Label.Size = UDim2.new(1, 0, 0, 20)
-Label.Position = UDim2.new(0, 0, 0, 90)
-Label.BackgroundTransparency = 1
-Label.Text = "TOTAL BONDS FARMADOS"
-Label.TextColor3 = Color3.fromRGB(150, 150, 150)
-Label.TextSize = 12
-Label.Font = Enum.Font.GothamBold
-Label.Parent = Frame
-
--- Status
-local Status = Instance.new("TextLabel")
-Status.Size = UDim2.new(1, 0, 0, 25)
-Status.Position = UDim2.new(0, 0, 0, 115)
-Status.BackgroundTransparency = 1
-Status.Text = "AGUARDANDO..."
-Status.TextColor3 = Color3.fromRGB(255, 255, 255)
-Status.TextSize = 14
-Status.Font = Enum.Font.GothamBold
-Status.Parent = Frame
-
--- Info extra
-local Info = Instance.new("TextLabel")
-Info.Size = UDim2.new(1, 0, 0, 20)
-Info.Position = UDim2.new(0, 0, 0, 140)
-Info.BackgroundTransparency = 1
-Info.Text = "Runs: 0 | Mortes: 0"
-Info.TextColor3 = Color3.fromRGB(200, 200, 200)
-Info.TextSize = 11
-Info.Font = Enum.Font.Gotham
-Info.Parent = Frame
-
--- Botão único
-local Btn = Instance.new("TextButton")
-Btn.Size = UDim2.new(0.9, 0, 0, 30)
-Btn.Position = UDim2.new(0.05, 0, 0, 165)
-Btn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
-Btn.Text = "▶ INICIAR FARM INFINITO"
-Btn.TextColor3 = Color3.new(1, 1, 1)
-Btn.TextSize = 14
-Btn.Font = Enum.Font.GothamBlack
-Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 8)
-Btn.Parent = Frame
-
--- SISTEMA DE SCAN CORRIGIDO (Procura em TODOS os lugares)
-local function FindBonds()
-    local Bonds = {}
-    
-    -- 1. Procurar no Workspace inteiro (recursivo)
-    local function ScanFolder(folder)
-        for _, obj in pairs(folder:GetChildren()) do
-            if obj.Name == "Bond" then
-                if obj:IsA("BasePart") then
-                    table.insert(Bonds, {
-                        Part = obj,
-                        Position = obj.Position,
-                        Distance = (obj.Position - RootPart.Position).Magnitude,
-                        Type = "Workspace"
-                    })
-                elseif obj:IsA("Model") then
-                    local part = obj:FindFirstChildWhichIsA("BasePart")
-                    if part then
-                        table.insert(Bonds, {
-                            Part = part,
-                            Model = obj,
-                            Position = part.Position,
-                            Distance = (part.Position - RootPart.Position).Magnitude,
-                            Type = "Model"
-                        })
-                    end
-                end
-            end
-            
-            -- Scan recursivo (mas não entra em jogadores)
-            if obj:IsA("Folder") or obj:IsA("Model") then
-                if not obj:IsA("Player") and obj.Name ~= "Players" then
-                    ScanFolder(obj)
-                end
-            end
-        end
-    end
-    
-    ScanFolder(Workspace)
-    
-    -- 2. Procurar em RuntimeItems (se existir)
-    local runtime = Workspace:FindFirstChild("RuntimeItems")
-    if runtime then
-        for _, item in pairs(runtime:GetChildren()) do
-            if item.Name == "Bond" then
-                local part = item:FindFirstChild("Part") or item:FindFirstChildWhichIsA("BasePart")
-                if part then
-                    table.insert(Bonds, {
-                        Part = part,
-                        Item = item,
-                        Position = part.Position,
-                        Distance = (part.Position - RootPart.Position).Magnitude,
-                        Type = "Runtime"
-                    })
-                end
-            end
-        end
-    end
-    
-    -- 3. Procurar ProximityPrompts (itens interativos)
-    for _, prompt in pairs(Workspace:GetDescendants()) do
-        if prompt:IsA("ProximityPrompt") then
-            local parent = prompt.Parent
-            if parent and (parent.Name == "Bond" or (parent.Parent and parent.Parent.Name == "Bond")) then
-                local part = parent:IsA("BasePart") and parent or parent:FindFirstChildWhichIsA("BasePart")
-                if part then
-                    table.insert(Bonds, {
-                        Part = part,
-                        Prompt = prompt,
-                        Position = part.Position,
-                        Distance = (part.Position - RootPart.Position).Magnitude,
-                        Type = "Prompt"
-                    })
-                end
-            end
-        end
-    end
-    
-    -- Ordenar por distância
-    table.sort(Bonds, function(a, b) return a.Distance < b.Distance end)
-    return Bonds
+return char, hum, root
 end
 
--- SISTEMA DE COLETA CORRIGIDO
-local function CollectBond(bondData)
-    if not bondData or not bondData.Part then return false end
-    
-    local success = false
-    local part = bondData.Part
-    
-    -- Verificar se ainda existe
-    if not part.Parent then return false end
-    
-    -- Mover até o bond (Tween suave)
-    local targetPos = part.Position + Vector3.new(0, 3, 0)
-    local distance = bondData.Distance
-    
-    if distance > 10 then
-        local speed = math.min(distance * 2, 1000) -- Velocidade adaptativa
-        local tween = TweenService:Create(RootPart, TweenInfo.new(distance/speed), {
-            CFrame = CFrame.new(targetPos)
-        })
-        tween:Play()
-        tween.Completed:Wait()
-    else
-        RootPart.CFrame = CFrame.new(targetPos)
-    end
-    
-    wait(0.1) -- Esperar chegar
-    
-    -- MÉTODO 1: ProximityPrompt
-    if bondData.Prompt then
-        pcall(function()
-            fireproximityprompt(bondData.Prompt, 0)
-            success = true
-        end)
-    end
-    
-    -- MÉTODO 2: Procurar prompt no objeto
-    if not success then
-        for _, child in pairs(part:GetChildren()) do
-            if child:IsA("ProximityPrompt") then
-                pcall(function()
-                    fireproximityprompt(child, 0)
-                    success = true
-                end)
-            end
-        end
-    end
-    
-    -- MÉTODO 3: RemoteEvent
-    if not success and bondData.Item then
-        pcall(function()
-            ReplicatedStorage:WaitForChild("Packages"):WaitForChild("ActivateObjectClient"):FireServer(bondData.Item)
-            success = true
-        end)
-    end
-    
-    -- MÉTODO 4: Touch
-    if not success then
-        pcall(function()
-            local touch = part:FindFirstChildOfClass("TouchTransmitter")
-            if touch then
-                firetouchinterest(RootPart, part, 0)
-                firetouchinterest(RootPart, part, 1)
-                success = true
-            end
-        end)
-    end
-    
-    -- MÉTODO 5: Colisão direta
-    if not success then
-        RootPart.CFrame = part.CFrame
-        wait(0.2)
-        success = true
-    end
-    
-    return success
+local function KillAllConnections()
+for _, conn in pairs(A.Refs.Connections) do
+if typeof(conn) == "RBXScriptConnection" then
+pcall(function() conn:Disconnect() end)
+end
+end
+A.Refs.Connections = {}
 end
 
--- SISTEMA DE MORTE E REJOIN
-local function KillAndRejoin()
-    STATS.IsRunning = false
-    STATS.Deaths += 1
-    
-    Status.Text = "REINICIANDO RUN..."
-    Status.TextColor3 = Color3.fromRGB(255, 165, 0)
-    
-    -- Método 1: Reset character
-    pcall(function()
-        Humanoid.Health = 0
-    end)
-    
-    -- Método 2: Se não funcionar, teleportar para fora do mapa
-    wait(2)
-    pcall(function()
-        RootPart.CFrame = CFrame.new(0, -1000, 0)
-    end)
-    
-    -- Método 3: Teleport service (novo servidor)
-    wait(3)
-    pcall(function()
-        TeleportService:Teleport(game.PlaceId, LocalPlayer)
-    end)
+local function KillAllThreads()
+for _, thread in pairs(A.Refs.Threads) do
+if typeof(thread) == "thread" then
+pcall(function() coroutine.close(thread) end)
+end
+end
+A.Refs.Threads = {}
 end
 
--- LOOP PRINCIPAL DE FARM
-local function FarmLoop()
-    local NoBondsCount = 0
-    local LastBondTime = tick()
-    
-    while STATS.IsRunning do
-        -- Atualizar referências (caso respawnou)
-        if not RootPart or not RootPart.Parent then
-            Character = GetCharacter()
-            Humanoid = Character:WaitForChild("Humanoid")
-            RootPart = Character:WaitForChild("HumanoidRootPart")
-        end
-        
-        local bonds = FindBonds()
-        
-        if #bonds > 0 then
-            NoBondsCount = 0
-            LastBondTime = tick()
-            
-            Status.Text = "COLETANDO: " .. #bonds .. " BONDS"
-            Status.TextColor3 = Color3.fromRGB(0, 255, 150)
-            
-            -- Coletar o mais próximo
-            local bond = bonds[1]
-            
-            if CollectBond(bond) then
-                STATS.TotalBonds += 1
-                STATS.SessionBonds += 1
-                Counter.Text = tostring(STATS.TotalBonds)
-                
-                -- Flash visual
-                Counter.TextColor3 = Color3.fromRGB(255, 255, 0)
-                task.delay(0.05, function()
-                    Counter.TextColor3 = Color3.fromRGB(0, 255, 150)
-                end)
-            end
-            
-            wait(0.2)
-        else
-            NoBondsCount += 1
-            Status.Text = "PROCURANDO... (" .. NoBondsCount .. ")"
-            Status.TextColor3 = Color3.fromRGB(255, 165, 0)
-            
-            -- Se não achou bonds por 10 segundos, matar e rejoin
-            if tick() - LastBondTime > 10 then
-                Status.Text = "SEM BONDS - REINICIANDO..."
-                KillAndRejoin()
-                return -- Parar este loop, novo servidor vai iniciar outro
-            end
-            
-            -- Mover para frente procurando
-            RootPart.CFrame = RootPart.CFrame + Vector3.new(50, 0, 0)
-            wait(0.5)
-        end
-        
-        -- Atualizar info
-        Info.Text = string.format("Runs: %d | Mortes: %d | Servers: %d", 
-            STATS.TotalRuns, STATS.Deaths, STATS.ServerHops)
-    end
+local function Cleanup()
+KillAllConnections()
+KillAllThreads()
+if A.Refs.UI and A.Refs.UI.Root then
+pcall(function() A.Refs.UI.Root:Destroy() end)
+A.Refs.UI = nil
+end
 end
 
--- SISTEMA DE AUTO-EXECUTE (Crucial para AFK 24/7)
-local function SetupAutoExecute()
-    -- Detectar respawn
-    LocalPlayer.CharacterAdded:Connect(function(newChar)
-        if STATS.IsRunning then
-            Status.Text = "RESPAWN DETECTADO - RETOMANDO..."
-            
-            -- Atualizar variáveis
-            Character = newChar
-            Humanoid = Character:WaitForChild("Humanoid")
-            RootPart = Character:WaitForChild("HumanoidRootPart")
-            
-            -- Reiniciar farm automaticamente
-            wait(2) -- Esperar tudo carregar
-            FarmLoop()
-        end
-    end)
-    
-    -- Detectar morte
-    Humanoid.Died:Connect(function()
-        STATS.Deaths += 1
-        if STATS.IsRunning then
-            wait(3) -- Esperar respawn automático do jogo
-            -- Se não respawnar em 3 segundos, forçar
-            if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                pcall(function()
-                    LocalPlayer:LoadCharacter()
-                end)
-            end
-        end
-    end)
+local function DestroyOldUI()
+for _, child in pairs(game.CoreGui:GetChildren()) do
+if child.Name == "ApexBonds" then
+pcall(function() child:Destroy() end)
+end
+end
 end
 
--- CONTROLE DO BOTÃO
-Btn.MouseButton1Click:Connect(function()
-    STATS.IsRunning = not STATS.IsRunning
-    
-    if STATS.IsRunning then
-        Btn.Text = "⏹ PARAR FARM"
-        Btn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
-        STATS.TotalRuns += 1
-        
-        SetupAutoExecute()
-        FarmLoop()
-    else
-        Btn.Text = "▶ INICIAR FARM INFINITO"
-        Btn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
-        Status.Text = "PAUSADO"
-    end
+local function CreateUI()
+DestroyOldUI()
+
+if A.Refs.UI and A.Refs.UI.Root then
+A.Refs.UI.Root:Destroy()
+A.Refs.UI = nil
+end
+
+local ui = Instance.new("ScreenGui")
+ui.Name = "ApexBonds"
+ui.Parent = game.CoreGui
+ui.ResetOnSpawn = false
+ui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 360, 0, 180)
+main.Position = UDim2.new(0.5, -180, 0.08, 0)
+main.BackgroundColor3 = Color3.fromRGB(6, 6, 8)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = ui
+
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
+
+local glow = Instance.new("ImageLabel")
+glow.Size = UDim2.new(1, 40, 1, 40)
+glow.Position = UDim2.new(0, -20, 0, -20)
+glow.BackgroundTransparency = 1
+glow.Image = "rbxassetid://8992230677"
+glow.ImageColor3 = Color3.fromRGB(0, 255, 150)
+glow.ImageTransparency = 0.9
+glow.Parent = main
+
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 36)
+header.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
+header.BorderSizePixel = 0
+header.Parent = main
+
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 14)
+
+local fix = Instance.new("Frame")
+fix.Size = UDim2.new(1, 0, 0, 12)
+fix.Position = UDim2.new(0, 0, 1, -12)
+fix.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
+fix.BorderSizePixel = 0
+fix.Parent = header
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -60, 1, 0)
+title.Position = UDim2.new(0, 15, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "APEX BONDS v4.1"
+title.TextColor3 = Color3.fromRGB(0, 0, 0)
+title.TextSize = 18
+title.Font = Enum.Font.GothamBlack
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = header
+
+local counter = Instance.new("TextLabel")
+counter.Size = UDim2.new(1, 0, 0, 55)
+counter.Position = UDim2.new(0, 0, 0, 42)
+counter.BackgroundTransparency = 1
+counter.Text = "0"
+counter.TextColor3 = Color3.fromRGB(0, 255, 150)
+counter.TextSize = 52
+counter.Font = Enum.Font.GothamBlack
+counter.Parent = main
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, 0, 0, 20)
+status.Position = UDim2.new(0, 0, 0, 98)
+status.BackgroundTransparency = 1
+status.Text = "STANDBY"
+status.TextColor3 = Color3.fromRGB(200, 200, 200)
+status.TextSize = 12
+status.Font = Enum.Font.GothamBold
+status.Parent = main
+
+local metrics = Instance.new("TextLabel")
+metrics.Size = UDim2.new(1, 0, 0, 16)
+metrics.Position = UDim2.new(0, 0, 0, 118)
+metrics.BackgroundTransparency = 1
+metrics.Text = "0/min | 0/hr | 00:00"
+metrics.TextColor3 = Color3.fromRGB(120, 120, 120)
+metrics.TextSize = 10
+metrics.Font = Enum.Font.Gotham
+metrics.Parent = main
+
+local barBg = Instance.new("Frame")
+barBg.Size = UDim2.new(0.86, 0, 0, 4)
+barBg.Position = UDim2.new(0.07, 0, 0, 140)
+barBg.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+barBg.BorderSizePixel = 0
+Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+barBg.Parent = main
+
+local bar = Instance.new("Frame")
+bar.Size = UDim2.new(0, 0, 1, 0)
+bar.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
+bar.BorderSizePixel = 0
+Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+bar.Parent = barBg
+
+local btn = Instance.new("TextButton")
+btn.Size = UDim2.new(0.86, 0, 0, 26)
+btn.Position = UDim2.new(0.07, 0, 0, 148)
+btn.BackgroundColor3 = Color3.fromRGB(0, 160, 100)
+btn.Text = "INITIALIZE"
+btn.TextColor3 = Color3.new(1, 1, 1)
+btn.TextSize = 13
+btn.Font = Enum.Font.GothamBlack
+Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+btn.Parent = main
+
+local close = Instance.new("TextButton")
+close.Size = UDim2.new(0, 28, 0, 28)
+close.Position = UDim2.new(1, -32, 0, 4)
+close.BackgroundColor3 = Color3.fromRGB(180, 30, 30)
+close.Text = "×"
+close.TextColor3 = Color3.new(1, 1, 1)
+close.TextSize = 18
+close.Font = Enum.Font.GothamBold
+Instance.new("UICorner", close).CornerRadius = UDim.new(0, 8)
+close.Parent = header
+
+A.Refs.UI = {
+Root = ui,
+Main = main,
+Counter = counter,
+Status = status,
+Metrics = metrics,
+Bar = bar,
+Button = btn,
+Close = close
+}
+
+close.MouseButton1Click:Connect(function()
+A.State.Running = false
+Cleanup()
 end)
 
--- Auto-iniciar se já estava rodando (persistência)
-if STATS.IsRunning then
-    wait(2)
-    Btn.Text = "⏹ PARAR FARM"
-    Btn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
-    SetupAutoExecute()
-    FarmLoop()
+btn.MouseButton1Click:Connect(function()
+ToggleEngine()
+end)
 end
 
-print([[
-    ╔══════════════════════════════════════════════════╗
-    ║           OMEGA BONDS v12.0                      ║
-    ║     "AFK 24/7 - O Último Script Necessário"      ║
-    ╠══════════════════════════════════════════════════╣
-    ║  Sistemas:                                       ║
-    ║  • Auto-Execute on Respawn (Nunca para)          ║
-    ║  • Kill & Rejoin (Quando acaba bonds)           ║
-    ║  • Persistência de Stats (Entre sessões)         ║
-    ║  • Scan 360° (5 métodos de busca)                ║
-    ║  • Coleta Quantum (5 métodos simultâneos)        ║
-    ║                                                  ║
-    ║  COMO USAR:                                      ║
-    ║  1. Execute o script                             ║
-    ║  2. Clique "INICIAR FARM INFINITO"               ║
-    ║  3. Deixe AFK - ele cuida do resto!              ║
-    ║                                                  ║
-    ║  Quando acabar bonds: Mata → Rejoin → Continua   ║
-    ╚══════════════════════════════════════════════════╝
-]])
+local function UpdateUI()
+if not A.Refs.UI then return end
+
+A.Refs.UI.Counter.Text = tostring(A.State.BondsTotal)
+
+local elapsed = tick() - A.State.CurrentServer
+local mins = math.floor(elapsed / 60)
+local secs = math.floor(elapsed % 60)
+
+local rate = elapsed > 0 and (A.State.BondsSession / elapsed * 60) or 0
+A.State.BPM = rate
+local hourly = rate * 60
+
+local rateText = ""
+if hourly >= 1000000 then
+rateText = string.format("%.1fM/hr", hourly / 1000000)
+elseif hourly >= 1000 then
+rateText = string.format("%.0fk/hr", hourly / 1000)
+else
+rateText = string.format("%d/hr", hourly)
+end
+
+A.Refs.UI.Metrics.Text = string.format("%.0f/min | %s | %02d:%02d", rate, rateText, mins, secs)
+
+local progress = math.min(rate / 1000, 1)
+A.Refs.UI.Bar.Size = UDim2.new(progress, 0, 1, 0)
+A.Refs.UI.Bar.BackgroundColor3 = Color3.fromRGB(0, 255 * progress, 150 * (1 - progress))
+end
+
+local function SetStatus(text, color)
+if A.Refs.UI and A.Refs.UI.Status then
+A.Refs.UI.Status.Text = text
+A.Refs.UI.Status.TextColor3 = color or Color3.fromRGB(200, 200, 200)
+end
+end
+
+local function SetButton(active)
+if not A.Refs.UI or not A.Refs.UI.Button then return end
+
+if active then
+A.Refs.UI.Button.Text = "TERMINATE"
+A.Refs.UI.Button.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+else
+A.Refs.UI.Button.Text = "INITIALIZE"
+A.Refs.UI.Button.BackgroundColor3 = Color3.fromRGB(0, 160, 100)
+end
+end
+
+local Scanner = {}
+Scanner.LastScan = {}
+Scanner.ScanTime = 0
+
+function Scanner.Execute()
+local now = tick()
+if now - Scanner.ScanTime < 0.05 then
+return Scanner.LastScan
+end
+
+local bonds = {}
+local checked = {}
+local char, hum, root = ValidatePlayerState()
+if not root then return bonds end
+
+local function ScanObject(obj, depth)
+if depth > A.Config.ScanDepth then return end
+if not obj or checked[obj] then return end
+checked[obj] = true
+
+if obj.Name == "Bond" then
+local part = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart")
+if part then
+local dist = (part.Position - root.Position).Magnitude
+if dist <= A.Config.MaxDistance then
+table.insert(bonds, {
+Part = part,
+Distance = dist,
+Priority = 1000 - dist,
+Type = obj:IsA("Model") and "Model" or "Part"
+})
+end
+end
+end
+
+for _, child in pairs(obj:GetChildren()) do
+if not child:IsA("Player") and child.Name ~= "Players" then
+ScanObject(child, depth + 1)
+end
+end
+end
+
+ScanObject(Workspace, 0)
+
+for _, prompt in pairs(Workspace:GetDescendants()) do
+if prompt:IsA("ProximityPrompt") then
+local parent = prompt.Parent
+if parent and (parent.Name == "Bond" or (parent.Parent and parent.Parent.Name == "Bond")) then
+local part = parent:IsA("BasePart") and parent or parent:FindFirstChildWhichIsA("BasePart")
+if part and not checked[part] then
+local dist = (part.Position - root.Position).Magnitude
+if dist <= A.Config.MaxDistance then
+table.insert(bonds, {
+Part = part,
+Prompt = prompt,
+Distance = dist,
+Priority = 1100 - dist,
+Type = "Prompt"
+})
+checked[part] = true
+end
+end
+end
+end
+end
+
+table.sort(bonds, function(a, b)
+if math.abs(a.Priority - b.Priority) > 100 then
+return a.Priority > b.Priority
+end
+return a.Distance < b.Distance
+end)
+
+Scanner.LastScan = bonds
+Scanner.ScanTime = now
+return bonds
+end
+
+local Navigator = {}
+
+function Navigator.TeleportTo(position)
+local char, hum, root = ValidatePlayerState()
+if not root then return false end
+
+local target = position + Vector3.new(0, 2.5, 0)
+local dist = (target - root.Position).Magnitude
+
+if dist > A.Config.MaxDistance then
+root.CFrame = CFrame.new(target)
+task.wait(0.15)
+return true
+elseif dist > 8 then
+local duration = math.min(dist / A.Config.TweenSpeed, 1.2)
+local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
+local tween = TweenService:Create(root, tweenInfo, {CFrame = CFrame.new(target)})
+
+local completed = false
+local connection = nil
+
+connection = tween.Completed:Connect(function()
+completed = true
+if connection then
+connection:Disconnect()
+end
+end)
+
+tween:Play()
+
+local startTime = tick()
+while not completed and (tick() - startTime) < duration + 0.5 do
+if not A.State.Running then
+tween:Cancel()
+if connection then connection:Disconnect() end
+return false
+end
+local _, _, checkRoot = ValidatePlayerState()
+if not checkRoot then
+tween:Cancel()
+if connection then connection:Disconnect() end
+return false
+end
+task.wait(0.03)
+end
+
+if connection then
+connection:Disconnect()
+end
+
+return completed
+else
+root.CFrame = CFrame.new(target)
+task.wait(0.05)
+return true
+end
+end
+
+local Collector = {}
+
+function Collector.Collect(bond)
+if not bond or not bond.Part or not bond.Part.Parent then return false end
+
+local success = false
+local part = bond.Part
+
+local _, _, root = ValidatePlayerState()
+if not root then return false end
+
+local navSuccess = Navigator.TeleportTo(part.Position)
+if not navSuccess then return false end
+
+_, _, root = ValidatePlayerState()
+if not root then return false end
+
+if bond.Prompt then
+pcall(function()
+fireproximityprompt(bond.Prompt, 1)
+success = true
+end)
+end
+
+if not success then
+for _, child in pairs(part:GetChildren()) do
+if child:IsA("ProximityPrompt") then
+pcall(function()
+fireproximityprompt(child, 1)
+success = true
+end)
+end
+end
+end
+
+if not success then
+pcall(function()
+root.CFrame = part.CFrame
+task.wait(0.1)
+success = true
+end)
+end
+
+return success
+end
+
+local Hopper = {}
+
+function Hopper.Execute()
+A.State.Running = false
+SetStatus("HOPPING SERVER...", Color3.fromRGB(255, 165, 0))
+
+local success, result = pcall(function()
+local api = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+local response = game:HttpGet(api)
+local data = HttpService:JSONDecode(response)
+
+if data and data.data then
+for _, server in ipairs(data.data) do
+if server.id ~= game.JobId and server.playing < server.maxPlayers then
+return server.id
+end
+end
+end
+return nil
+end)
+
+task.wait(0.5)
+
+if success and result then
+pcall(function()
+TeleportService:TeleportToPlaceInstance(game.PlaceId, result, LocalPlayer)
+end)
+else
+pcall(function()
+TeleportService:Teleport(game.PlaceId, LocalPlayer)
+end)
+end
+end
+
+function Hopper.ResetAndHop()
+A.State.Running = false
+SetStatus("EXECUTING RESET...", Color3.fromRGB(255, 50, 50))
+
+local char, hum, root = ValidatePlayerState()
+if hum then
+pcall(function() hum.Health = 0 end)
+end
+
+task.wait(A.Config.RejoinDelay)
+
+pcall(function()
+if root then
+root.CFrame = CFrame.new(0, -500, 0)
+end
+end)
+
+task.wait(2)
+
+Hopper.Execute()
+end
+
+local AntiAFK = {}
+
+function AntiAFK.Start()
+local thread = task.spawn(function()
+while A.State.Running do
+task.wait(A.Config.AntiAFKInterval)
+if not A.State.Running then break end
+
+pcall(function()
+VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+task.wait(0.05)
+VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+end)
+end
+end)
+
+table.insert(A.Refs.Threads, thread)
+end
+
+local Engine = {}
+Engine.MainThread = nil
+
+function Engine.SingleTick()
+if not A.State.Running or A.State.Paused then return end
+
+local char, hum, root = ValidatePlayerState()
+if not root then
+SetStatus("INVALID STATE - RECONNECTING", Color3.fromRGB(255, 0, 0))
+task.wait(1)
+return
+end
+
+local bonds = Scanner.Execute()
+
+if #bonds > 0 then
+A.State.LastBond = tick()
+
+for i = 1, math.min(3, #bonds) do
+if not A.State.Running then break end
+
+local bond = bonds[i]
+SetStatus(string.format("COLLECTING %d/%d (%.0fm)", i, #bonds, bond.Distance), Color3.fromRGB(0, 255, 150))
+
+if Collector.Collect(bond) then
+A.State.BondsTotal += 1
+A.State.BondsSession += 1
+UpdateUI()
+end
+
+task.wait(A.Config.CollectionCooldown)
+end
+else
+local timeSinceBond = tick() - A.State.LastBond
+
+if timeSinceBond > 12 then
+SetStatus("SERVER DEPLETED - RESETTING", Color3.fromRGB(255, 100, 0))
+Hopper.ResetAndHop()
+return
+elseif timeSinceBond > 5 then
+SetStatus("EXPLORING...", Color3.fromRGB(255, 165, 0))
+
+local x = root.Position.X
+if x < 75000 then
+root.CFrame = root.CFrame + Vector3.new(150, 0, 0)
+else
+Hopper.ResetAndHop()
+return
+end
+else
+SetStatus("SCANNING...", Color3.fromRGB(120, 120, 120))
+end
+end
+
+UpdateUI()
+end
+
+function Engine.Start()
+if A.State.Running then return end
+
+A.State.Running = true
+A.State.Paused = false
+A.State.CurrentServer = tick()
+A.State.BondsSession = 0
+A.State.LastBond = tick()
+A.State.Runs += 1
+
+SetButton(true)
+SetStatus("ENGINE STARTED", Color3.fromRGB(0, 255, 150))
+
+AntiAFK.Start()
+
+Engine.MainThread = task.spawn(function()
+while A.State.Running do
+Engine.SingleTick()
+task.wait(A.Config.EngineInterval)
+end
+end)
+
+table.insert(A.Refs.Threads, Engine.MainThread)
+end
+
+function Engine.Stop()
+A.State.Running = false
+A.State.Paused = false
+KillAllThreads()
+Engine.MainThread = nil
+SetButton(false)
+SetStatus("TERMINATED", Color3.fromRGB(200, 200, 200))
+end
+
+function Engine.RestartAfterRespawn()
+if not A.State.Running then return end
+
+Engine.Stop()
+task.wait(1)
+
+A.State.Running = true
+A.State.Paused = false
+A.State.CurrentServer = tick()
+A.State.BondsSession = 0
+A.State.LastBond = tick()
+
+SetButton(true)
+SetStatus("RESTARTED AFTER RESPAWN", Color3.fromRGB(0, 255, 150))
+
+AntiAFK.Start()
+
+Engine.MainThread = task.spawn(function()
+while A.State.Running do
+Engine.SingleTick()
+task.wait(A.Config.EngineInterval)
+end
+end)
+
+table.insert(A.Refs.Threads, Engine.MainThread)
+end
+
+function ToggleEngine()
+if A.State.Running then
+Engine.Stop()
+else
+Engine.Start()
+end
+end
+
+local function Initialize()
+Cleanup()
+DestroyOldUI()
+CreateUI()
+
+local conn = LocalPlayer.CharacterAdded:Connect(function(char)
+if A.State.Running then
+task.wait(1)
+Engine.RestartAfterRespawn()
+end
+end)
+
+table.insert(A.Refs.Connections, conn)
+
+if A.State.Running then
+task.wait(0.5)
+Engine.Start()
+end
+end
+
+Initialize()
