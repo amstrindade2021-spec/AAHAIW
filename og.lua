@@ -8,7 +8,7 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
 local PlaceAliases = {
-    [6839171747] = {Name = "Dead Rails [Beta]", Script = "DeadRails"},
+    [116495829188952] = {Name = "Dead Rails [Beta]", Script = "DeadRails"},
     [142823291] = {Name = "Murder Mystery 2", Script = "MM2"},
     [286090429] = {Name = "Arsenal", Script = "Arsenal"},
     [3101667897] = {Name = "Legends of Speed", Script = "LegendsOfSpeed"},
